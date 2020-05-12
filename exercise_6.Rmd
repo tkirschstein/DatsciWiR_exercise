@@ -14,7 +14,7 @@ output:
 
 1. Try to rearrange the data objects `a.vec`, `x.vec`, and `y.vec` such that apply can be used to calculate all distances.
 
-```{r, exe-1, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-1, collapse=TRUE, echo=TRUE, cache=F}
 weig.mh.dist <- function(x) x[1] * (abs(x[2] - x[4]) + abs(x[3] - x[5]) ) 
 n <- 10                             # set a number of points/customers
 a.vec <- sample(1:100, size = n)    # sample weights for each point/customer
@@ -26,7 +26,7 @@ apply(df, 1, weig.mh.dist)
 
 2. Try to fasten the code by initializing all data objects in the necessary size in advance.
 
-```{r, exe-2, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-2, collapse=TRUE, echo=TRUE, cache=F}
 # old time: 12.58 sec.
 n <- 10^6               # number of trials
 u <- 0; v <- 0          # current location
@@ -44,7 +44,7 @@ Note that the computation times depend on your PC.
 
 3. Can you simplify and fasten the code by sampling only even numbers?
 
-```{r, exe-3, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-3, collapse=TRUE, echo=TRUE, cache=F}
 # old time: 11.85 sec.
 n <- 10^6                 # number of trials
 system.time({
@@ -57,7 +57,7 @@ res.vec <- a * (abs(x) + abs(y) )
 
 4. Can you reformulate the stopping criteria such that only one break-statement is necessary?
 
-```{r, exe-4, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-4, collapse=TRUE, echo=TRUE, cache=F}
 # old time: 12.27 sec.
 n <- 10^6          # number of trials
 n.excess <- 10^6 * 1.5    # but no more then n.excess loops 
@@ -80,7 +80,7 @@ system.time(repeat{
 
 5. Formulate a loop that calculates the inventory records over $n$ periods based on an initial stock level (say $i_0 = 20$) where every 4 periods 40 units arrive at the inventory. Sample the demand for each period from a normal distribution with $\mathcal{D} \sim N(10, 2)$ and round to integers.
 
-```{r, exe-5, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-5, collapse=TRUE, echo=TRUE, cache=F}
 n <- 50
 i.vec <- numeric(n)
 d.vec <- round(rnorm(n, mean = 10, sd = 2))
@@ -100,7 +100,7 @@ legend("topright", col=c("black","red"), legend = c("stock", "demand"), bty = "n
 
 6. Consider a dynamic lot sizing problem with ordering cost of $c_o = 100$ and a holding cost rate $c_h = 0.1$ $ per period and unit. The demand over 10 periods is sampled from a Possion distribution with $\lambda = 10$ (use `rpois()`). Calculate the total cost matrix with R.
 
-```{r, exe-6, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-6, collapse=TRUE, echo=TRUE, cache=F}
 n <- 10
 d.vec <- rpois(n, lambda = 10)
 c.mat <- matrix(NA, ncol = n, nrow = n)
@@ -114,7 +114,7 @@ for(i in 1:n){
 
 7. Formulate a function that performs 1st-order exponential smoothing: $p_{t+1} = (1-\alpha) \cdot p_t + \alpha \cdot x_t$. Is there also an builtin function? If so, compare run times.
 
-```{r, exe-7, collapse=TRUE, echo=TRUE, cache=TRUE}
+```{r, exe-7, collapse=TRUE, echo=TRUE, cache=F}
 first.exsm <- function(alpha, d, p.ini){
   n <-length(d)
   p <- numeric(n+1)
