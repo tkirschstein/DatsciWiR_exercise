@@ -58,3 +58,152 @@ library(DT)
 datatable(head(biathlon_results_women, 50))
 ```
 
+# Analysis
+
+## Preparation
+
+Usually there is some code you need to execute before your analysis with the starts. This workspace setup often comprises of loading the raw data itself, starting some packages, or sourcing some previsoulsy written functions. This part of the code is typically not that interesting for a reader, therefore it is often advisable to put it into a separate code chunk which is not displayed in the report compiled later on:
+
+```{r, setup, echo=F, include=T, warning=FALSE, message=FALSE, error=FALSE}
+library(tidyverse)
+library(car)
+library(ggplot2)
+library(kableExtra)
+```
+
+## Get an overview & make hypotheses
+
+Typically you start a data analysis project with getting an overview on the data. A part of this task has been accomplished in the data description section above. Important is that you try to present information relevant for the reader w.r.t. the particular research question to be discussed. Often this structure of an analysis is organized via hypotheses which are introduced at the beginning of the report.
+
+One hypothesis could be that the competition types affect skiing speed (i.e., speed in mass start and sprint differ as for Olympic and world cup races). In order to check this hypothesis, the first question to be answered is, how many observations are present in the different combinations of competition types. The total number of of observations can be computed like this:
+
+```{r, analysis-1, echo=T}
+with(biathlon_results_women, table(competition , type))
+```
+
+These numbers seem reassuring. However, there are also other factors affecting such as the snow conditions. Thus, to make reliable statements on the effects competition types, the remaining potentially effecting variables should be distributed in similarly in the races considered in combination of competition types. Without controlling these externalities precisely, we can look at the number of *races* in each category instead of the number of observations (as all athletes in a race face the same track and weather as well as snow condtions).
+
+```{r, analysis-2, echo=T}
+tmp <- aggregate(date ~ competition + type, biathlon_results_women , function(x) length(unique(x) ))
+tmp2 <- matrix(tmp$date, ncol = 3, nrow = 4)
+# add sums
+tmp2 <- cbind(tmp2, rowSums(tmp2))
+tmp2 <- rbind(tmp2, colSums(tmp2))
+# add row and column titles
+colnames(tmp2) <- c(unique(tmp$type),"sum")
+rownames(tmp2) <- c(unique(tmp$competition),"sum")
+
+kable(tmp2, "pandoc")
+```
+
+The results reveal that for Olympics, we have only few races (of course). Thus, we should probably exclude the Olympics or at least be very cautious with the results obtained for the Olympic races. When the effects of categorial variables on a numeric variable is to be studied, an [ANOVA](http://www.sthda.com/english/wiki/one-way-anova-test-in-r) 
+
+```{r, analysis-anova, echo=T}
+# ANOVA with all data - just main effects
+res.aov.main <- aov(speed ~ type + competition, data = biathlon_results_women)
+# F tests 
+summary(res.aov.main)
+# estimated coefficients
+res.aov.main$coefficients
+# test pairwise differences
+TukeyHSD(res.aov.main)
+
+# Alternative: General linear model
+res.lm <- lm(speed ~ type + competition, data = biathlon_results_women)
+summary(res.lm)
+```
+
+Based on the ANOVA results also pairwise comparisons between the groups' means can be made (carefully due to the multiple testing problem). Aside the `aov()` function, applying  `lm()` yields the same result (as long as the variables are properly defined). *Homework*: Compare goodness-of-fit and coefficients of both approaches. 
+
+To display the results of an ANOVA, usually boxplots/violine plots and interaction plots are used. Boxplots give an overall impression of the data and show the distribution of the dependent variable in the different groups.
+
+```{r, analysis-anova-boxplot, echo=T}
+ggplot(data = biathlon_results_women, aes(x = type, y = speed)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width = .25) +
+  facet_wrap(~competition)
+```
+
+Due to the complete distributional information, it is not obvious whether the dependent variable differs in the groups on average when looking at boxplots/violine plots only. Interaction plots therefore condense location information by displaying only the means or other measures of location sometimes also accompanied by some measure of distribution.   
+
+```{r, analysis-anova-int-act-plto, echo=T}
+ggplot(data = biathlon_results_women, aes(x = type, color = competition, group = competition, y = speed)) +
+  stat_summary(fun = median, geom = "point") +
+  stat_summary(fun = median, geom = "line")
+```
+
+The interactions plot shows a differentiated picture: For mass start and pursuit championship races are faster than world cup and Olympic races on average. In contrast, sprint and individual races are faster at the Olympics. Of course, one has to be careful with any Olympic results due to the limited number of races. In such a case, more sophisticated model should be condsidered, i.e., in some/each combination of race type and competition type a different mean should be estimated (i.e., a model with interaction effects).
+
+## Dive into details
+
+Once you obtained an overview, its time to look into the details. Often reality is complex and many aspects that have not been considered so far may invalidate the results of simple 1st-glimpse impressions. To circumvent this problem, one should look only at subsets of the data where the variable of interest varies, but the remaining variables are as fixed as possible. 
+
+For example, the high speeds in the Olympic Sprint and Individual races might be caused by favorable weather conditions or easy course profiles. To check whether weather conditions have an impact on skiing speed, one can look at the races at a given location and given type over time. This way, competition type and course effects are fixed. A location which is regularly visited during a season is Oberhof, Germany. Additionally, wheather is notoriously instable there.
+
+```{r, analysis-3, echo=T}
+# Sprint results in Oberhof 
+tmp <- subset(biathlon_results_women, location == "Oberhof" & competition == "S")
+# conVert season into factor
+tmp$season <- as.factor(tmp$season)
+# reorder factor levels chronologically
+tmp$season <- factor(tmp$season , levels(tmp$season)[c(8:9, 1:7)])
+# prepare environmental conditions
+tmp.anno <- cbind(
+  aggregate(weather.conditions ~ season,  tmp, unique),
+  aggregate(snow.conditions ~ season,  tmp, unique)[,2],
+  aggregate(snow.temperature ~ season,  tmp, unique)[,2]) 
+# build annotation strings
+tmp.anno <- data.frame(season = tmp.anno[,1], anno = paste(apply(tmp.anno[,-1], 1, function(x) paste(x, collapse="&")),"°C", sep=""))
+# function for formatting annotations
+addline_format <- function(x,...){
+  gsub('&','\n',x) #\\s
+}
+
+ggplot(tmp, aes(y = speed, x=season)) + 
+  geom_violin(trim = F) +
+  geom_text(data = tmp.anno, 
+            aes(x = season, y = 7.1, label = addline_format(anno))) + 
+  ylim(4.5,7.3) 
+```
+
+The parallel violine plots indicate that environmental conditions may have a noteworthy influence on speed. Particularly, high snow temperature (>0°C) and wet/soft snow seem to be problematic (although, not always, see season 12-13).
+
+## Data manipulation
+
+Preliminary analyses often reveal that some data or variables have to be manipulated to decide for or against the research hypothesis. Data manipulation comprises of e.g. omitting observations (e.g., due to missing data or measurement errors), data imputation (in case of missing data), and variable transformation
+
+For example, snow and weather conditions are often hard to distinguish. A strategy to remedy noisy level definitions is to construct simplified variables.
+
+```{r, analysis-4, echo=T}
+# extract snow conditions in vector & convert it to factor
+snow.cond.simplest <- as.factor(biathlon_results_women$snow.conditions)
+# all levels containing wet or soft are relabeled as "wet"
+levels(snow.cond.simplest)[grepl("wet|Wet|soft|Soft", levels(snow.cond.simplest) )] <- "wet"
+# all levels containing hard, packed, or compact are relabeled as "hard"
+levels(snow.cond.simplest)[grepl("hard|Hard|Compact|Packed|packed", levels(snow.cond.simplest) )] <- "hard"
+# all levels containing powder, or granular are relabeled as "hard"
+levels(snow.cond.simplest)[grepl("Powder|powder|granular|Granular", levels(snow.cond.simplest) )] <- "granular"
+
+# extract weather conditions in vector & convert it to factor
+weather.cond.simplest <- as.factor(biathlon_results_women$weather.conditions)
+# distinguish only factors "dry" and "precipitation"
+levels(weather.cond.simplest)[grepl("clear|Clear|sunny|Sunny|cloudy|Cloudy|Fog|fog", levels(weather.cond.simplest) )] <- "dry"
+levels(weather.cond.simplest)[grepl("snow|Snow|rain|Rain", levels(weather.cond.simplest) )] <- "precip"
+# add to dataset
+biathlon_results_women <- add_column(snow.cond.simplest = snow.cond.simplest, weather.cond.simplest = weather.cond.simplest, biathlon_results_women)
+```
+
+
+## Data analysis
+
+Finally, some analysis technique(s) should be applied for answering the research question/hypothesis. 
+
+For example, a linear model might be appropriate to study the effects of the aforementioned variables.
+
+```{r, analysis-5, echo=T}
+# extract snow conditions in vector & convert it to factor
+lm.mod <- lm(speed ~ competition + type + snow.cond.simplest + weather.cond.simplest + age + I(age^2) + snow.temperature + I(snow.temperature^2) + air.temperature + elevation , data = biathlon_results_women)
+summary(lm.mod)
+```
+
+Its always advisable to check the obtained results for plausibility. In our example particularly the signs of the variables should be checked. Beyond that you may check how the functional relationships of the some variables can be visualized.
