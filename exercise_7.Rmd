@@ -1,0 +1,552 @@
+---
+title: "Exercises Data Science with R"
+author: "Thomas Kirschstein"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float: true
+    number_sections: false
+  pdf_document: default
+---
+```{r, setup, echo=F}
+library(data.table)
+```
+
+# Chapter 7
+
+1.  Formulate the Steiner-Weber model with Euclidean distance and solve it with `optim()`.
+
+```{r, exe-1, collapse=TRUE, echo=TRUE, cache=F}
+stein.web.fun <- function(x , cust, a){
+  sum(a * apply(cust, 1, function(y) sqrt(sum((y-x)^2)) ) )
+} 
+# number of points/customers
+n <- 10 
+# sample weights 
+a.vec <- sample(1:100, size = n)    
+# customer locations
+c.mat <- data.frame( x = rnorm(n), y = rnorm(n))
+# optimal solution
+optim(par = c(0,0), fn = stein.web.fun, method = c("CG"), cust = c.mat, a = a.vec)
+```
+
+2. Formulate the Newsvendor model and use `optim()` to find the optimal order quantity. Compare the optimal solution found by `optim()` with the theoretical optimum.
+
+```{r, exe-2, collapse=TRUE, echo=TRUE, cache=F}
+# direct optimization
+news.vend.fun <- function(x, cu, co, mu, sigma){
+  tmp1 <- function(y) co*(x-y)*dnorm(y, mean=mu, sd = sigma)
+  tmp2 <- function(y) cu*(y-x)*dnorm(y, mean=mu, sd = sigma)
+  integrate(tmp1, lower = 0, upper=x)$value + integrate(tmp2, lower = x, upper=Inf)$value
+} 
+
+# the elegant way 
+news.vend.ele.fun <- function(x, cu, co, mu, sigma){
+  co*(x - mu) + (cu + co)*sigma*(dnorm((x-mu)/sigma) - ((x-mu)/sigma) * (1- pnorm((x-mu)/sigma)))
+}
+
+# example data
+mu <- 100
+sigma <- 20
+co <- .25
+cu <- 1
+
+# find optimum
+## direct, but slow
+system.time(opt.news <- optim(par = 100, fn = news.vend.fun, lower = 0, upper = 200, method="L-BFGS-B", co = co, cu = cu, sigma = sigma, mu=mu))
+## elegant, fast
+system.time(opt.news.elegant <- optim(par = 100, fn = news.vend.ele.fun, lower = 0, upper = 200, method="L-BFGS-B", co = co, cu = cu, sigma = sigma, mu=mu))
+
+# theoretical optimum
+cr <- cu/(cu+co) # critical ratio
+
+q.star <- qnorm(cr, mean=mu, sd = sigma) 	# direct
+q.star <- mu + sigma * qnorm(cr) 			    # transformation
+
+# difference numerical vs. theoretical optimum
+opt.news$par - q.star
+# --> quite close
+```
+
+3. Add an inventory capacity constraint to the Wagner-Whitin model and resolve it with `Rglpk`.
+
+```{r, exe-3, collapse=TRUE, echo=TRUE, cache=F}
+library(Rglpk)     
+# assign names to decision vector
+n <- 6                              # number of periods
+co <- 50                            # ordering cost rate
+ch <- 0.1                           # holding cost rate
+d.vec <- round(rnorm(n, mean = 100, sd = 20))   # sample demand
+bigM <- sum(d.vec)                  # set big M
+x.vec <- numeric(3*n + 1)           # initialize decision variables
+# right-hand side vector with 200 units inventory capacity
+b.vec <- c(d.vec, rep(0, n + 2), rep(200, n) )  
+# objective coefficients 
+c.vec <- c(rep(ch, n+1), rep(0, n), rep(co, n))    
+# vector with constraint directions 
+const.vec <- c(rep("==", n), rep("<=", n) , rep("==", 2), rep("<=", n) )
+# vector with variable types
+vtype.vec <- c(rep("C",n + 1), rep("C",n), rep("B",n)) 
+# initialize constraint matrix
+A.mat <- matrix(0, ncol = 3*n + 1, nrow = 3*n+2)    
+# write coefficient in first n rows (inventory constraints)
+for(i in 1:n){
+  A.mat[i,i]   <- 1         # coefficient for l_{t-1}
+  A.mat[i,i+1] <- -1        # coefficient for l_{t}
+  A.mat[i,n + 1 + i] <- 1   # coefficient for q_{t}
+}
+# write coefficient in rows (n+1):(2*n) (ordering constraints)
+for(i in (n+1):(2*n)){
+  A.mat[i,i+1] <- 1             # coefficient for q_{t}
+  A.mat[i,n + 1 + i] <- -bigM   # coefficient for y_{t}
+}
+# write coefficient in last two rows (inventory initialization)
+A.mat[nrow(A.mat)-n-1,1] <- 1    # coefficient for i_{0}
+A.mat[nrow(A.mat)-n,n+1] <- 1    # coefficient for i_{T}
+# add inventory constraints
+for(i in 1:n){
+  A.mat[nrow(A.mat)-n+i, i+1] <- 1
+}
+# solve MILP
+sol <- Rglpk_solve_LP(obj = c.vec, mat = A.mat, dir = const.vec, rhs = b.vec, types = vtype.vec)
+# list with solution and demand
+list( l = sol$solution[1:(n+1)],         # inventory levels
+        q = sol$solution[(n+2):(2*n+1)],   # order quantities
+        y = tail(sol$solution, n),         # order indicators
+        d = d.vec )                        # demand
+# optimum
+sol$optimum
+```
+
+4. Solve the Transshipment Problem with `Rglpk`:
+$$ \min\limits_{x_{ij}} \rightarrow \sum_{i \in \mathcal{V}_a }\sum_{j \in \mathcal{V}_t } c_{ij} \cdot x_{ij} + \sum_{j \in \mathcal{V}_t }\sum_{k \in \mathcal{V}_b } c_{jk} \cdot x_{jk}  $$
+\begin{align}
+\sum_{j \in \mathcal{V}_t} x_{ij} & \leq a_i & \forall i \in \mathcal{V}_a \\
+\sum_{j \in \mathcal{V}_t} x_{jk} & \geq b_k & \forall k \in \mathcal{V}_b \\
+\sum_{i \in \mathcal{V}_a} x_{ij} & = \sum_{k \in \mathcal{V}_b} x_{jk} & \forall j \in \mathcal{V}_t \\
+x_{ij} & \geq 0 \\
+\end{align}
+where $a_i$ is the maximum supply capacity of node $i \in \mathcal{V}_a$, $b_k$ denotes the demand of node $j \in \mathcal{V}_b$, $c_{ij/jk}$ are transport cost rates and $x_{ij/jk}$ are shipment quantities.   
+
+```{r, exe-4, collapse=TRUE, echo=TRUE, cache=F}
+n.a <- 4                            # number sources
+n.b <- 5                            # number sinks
+n.t <- 3                            # number terminals
+nam.A <- paste("A",1:n.a, sep="")
+nam.B <- paste("B",1:n.b, sep="")
+nam.T <- paste("T",1:n.t, sep="")
+# sample demand & supply
+repeat{
+  d.vec <- round(runif(n.b, min = 100, max = 200)) 
+  s.vec <- round(runif(n.a, min = 150, max = 250)) 
+  # check for sufficient supply
+  if(sum(d.vec) < sum(s.vec)) break
+}
+# sample distances
+## sources-terminals
+d.a.t <- round(runif(n.a*n.t, min = 1, max = 50)) 
+## terminals-sinks
+d.t.b <- round(runif(n.b*n.t, min = 1, max = 30))
+# initialize decision variables
+x.vec <- numeric(n.a*n.t + n.b*n.t)           
+# right-hand side vector with 200 units inventory capacity
+b.vec <- c(s.vec, d.vec, rep(0, n.t) )  
+# objective coefficients 
+c.vec <- c(d.a.t, d.t.b)    
+# vector with constraint directions 
+const.vec <- c(rep("<=", n.a), rep(">=", n.b) , rep("==", n.t) )
+# vector with variable types
+vtype.vec <- rep("C", length(x.vec))
+# constraint matrix A
+A.mat <- matrix(0, ncol = length(x.vec), nrow = n.a + n.b + n.t)
+# use variable names
+colnames(A.mat) <- c(
+  apply(expand.grid(nam.A, nam.T), 1, paste, collapse="-"),
+  apply(expand.grid(nam.T, nam.B), 1, paste, collapse="-")
+)
+# iteratively add constraints via name matching
+# supply constraints
+t.id <- 1
+for(i in 1:n.a){
+  A.mat[t.id, grepl(nam.A[i] , colnames(A.mat) )  ] <- 1
+  t.id <- t.id + 1
+}
+# demand constraints
+for(i in 1:n.b ){
+    A.mat[t.id, grepl(nam.B[i] , colnames(A.mat) )  ] <- 1
+    t.id <- t.id + 1
+}
+# terminal constraints
+for(i in 1:n.t ){
+    A.mat[t.id, grepl(nam.T[i] , colnames(A.mat) )  ] <- rep( c(1,-1), times=c(n.a, n.b) )
+    t.id <- t.id + 1
+}
+
+# solve MILP
+sol.uncnst <- Rglpk_solve_LP(obj = c.vec, mat = A.mat, dir = const.vec, rhs = b.vec, types = vtype.vec, control =list("verbose" = T) )
+ship.uncnst <- sol.uncnst$solution
+names(ship.uncnst) <- colnames(A.mat)
+```
+
+a. How would you cope with transshipment capacities at nodes $j \in \mathcal{V}_t$?   
+
+Add constraints with terminal capacity $d_j$:
+
+$$ \sum_{i  \in \mathcal{V_a} } x_{ij} \leq d_j  \qquad \forall j \in \mathcal{V_t}$$
+
+```{r, exe-4a, collapse=TRUE, echo=TRUE, cache=F}
+# sample capacities
+repeat{
+  cap.vec <- round(runif(n.t, min = 150, max = 275)) 
+  # check for sufficient supply
+  if(sum(d.vec) < sum(cap.vec)) break
+}
+# right-hand side vector 
+b.vec.cap <- c(s.vec, d.vec, rep(0, n.t), cap.vec )  
+# vector with constraint directions 
+const.vec.cap <- c(rep("<=", n.a), rep(">=", n.b) , rep("==", n.t),  rep("<=", n.t))
+# constraint matrix A
+A.mat.cap <- matrix(0, ncol = length(x.vec), nrow = n.a + n.b + 2*n.t )
+# use variable names
+colnames(A.mat.cap) <- c(
+  apply(expand.grid(nam.A, nam.T), 1, paste, collapse="-"),
+  apply(expand.grid(nam.T, nam.B), 1, paste, collapse="-")
+)
+# iteratively add constraints via name matching
+# supply constraints
+t.id <- 1
+for(i in 1:n.a){
+  A.mat.cap[t.id, grepl(nam.A[i] , colnames(A.mat.cap) )  ] <- 1
+  t.id <- t.id + 1
+}
+# demand constraints
+for(i in 1:n.b ){
+  A.mat.cap[t.id, grepl(nam.B[i] , colnames(A.mat.cap) )  ] <- 1
+    t.id <- t.id + 1
+}
+# terminal constraints
+for(i in 1:n.t ){
+  A.mat.cap[t.id, grepl(nam.T[i] , colnames(A.mat.cap) )  ] <- rep( c(1,-1), times=c(n.a, n.b) )
+    t.id <- t.id + 1
+}
+# capacity constraints
+for(i in 1:n.t ){
+  A.mat.cap[t.id, grepl( paste("A*-",nam.T[i],sep="") , colnames(A.mat.cap) )  ] <- 1
+    t.id <- t.id + 1
+}
+# solve MILP
+sol.cap <- Rglpk_solve_LP(obj = c.vec, mat = A.mat.cap, dir = const.vec.cap, rhs = b.vec.cap, types = vtype.vec, control =list("verbose" = T, "presolve" = T) )
+ship.cap <- sol.cap$solution
+names(ship.cap) <- colnames(A.mat)
+# compare solutions
+## cost - effect
+sol.cap$optimum - sol.uncnst$optimum
+## solution
+data.table(rbind(ship.cap, ship.uncnst))
+```
+
+b. How would you cope with fixed transshipment costs? 
+
+Change objective function by introducing binary variables $\alpha_j \in \{0,1\}$ and transshipment cost $c^{TS}_j$
+
+$$ \min\limits_{x_{ij}} \rightarrow \sum_{i \in \mathcal{V}_a }\sum_{j \in \mathcal{V}_t } c_{ij} \cdot x_{ij} + \sum_{j \in \mathcal{V}_t }\sum_{k \in \mathcal{V}_b } c_{jk} \cdot x_{jk} + \sum_{j \in \mathcal{V_t}} \alpha_j \cdot c^{TS}_j  $$
+Additionally, constraints for assigning the correct values of $\alpha_j$ have to be added:
+
+$$ \sum_{i \in \mathcal{V_a} } x_{ij} \leq \alpha_j \cdot d_j $$
+
+
+```{r, exe-4b, collapse=TRUE, echo=TRUE, cache=F}
+# sample transshipment cost 
+c.ts.vec <- round(runif(n.t, min = 5000, max = 10000)) 
+
+x.vec.ts <- numeric(n.a*n.t + n.b*n.t + n.t)
+# right-hand side vector 
+b.vec.ts <- c(s.vec, d.vec, rep(0, 2*n.t) )  
+# objective coefficients 
+c.vec.ts <- c(d.a.t, d.t.b, c.ts.vec)
+# vector with constraint directions 
+const.vec.ts <- c(rep("<=", n.a), rep(">=", n.b) , rep("==", n.t) , rep("<=", n.t))
+# vector with variable types
+vtype.vec.ts <- c( rep("C", n.a*n.t + n.b*n.t), rep("B", n.t) )
+# constraint matrix 
+A.mat.ts <- matrix(0, ncol = length(x.vec.ts), nrow = n.a + n.b + 2*n.t)
+# use variable names
+colnames(A.mat.ts) <- c(
+  apply(expand.grid(nam.A, nam.T), 1, paste, collapse="-"),
+  apply(expand.grid(nam.T, nam.B), 1, paste, collapse="-"),
+  paste("alpha-", 1:n.t, sep = "")
+)
+# iteratively add constraints via name matching
+# supply constraints
+t.id <- 1
+for(i in 1:n.a){
+  A.mat.ts[t.id, grepl(nam.A[i] , colnames(A.mat.ts) )  ] <- 1
+  t.id <- t.id + 1
+}
+# demand constraints
+for(i in 1:n.b ){
+  A.mat.ts[t.id, grepl(nam.B[i] , colnames(A.mat.ts) )  ] <- 1
+    t.id <- t.id + 1
+}
+# terminal constraints
+for(i in 1:n.t ){
+  A.mat.ts[t.id, grepl(nam.T[i] , colnames(A.mat.ts) )  ] <- rep( c(1,-1), times=c(n.a, n.b) )
+    t.id <- t.id + 1
+}
+# capacity constraints
+for(i in 1:n.t ){
+  A.mat.ts[t.id, grepl( paste("A*-", nam.T[i], sep = "") , colnames(A.mat.ts) )  ] <- 1
+  A.mat.ts[t.id, grepl( paste("alpha-", i, sep = "") , colnames(A.mat.ts) )  ] <- -cap.vec[i]
+   t.id <- t.id + 1
+}
+# solve MILP
+sol.ts <- Rglpk_solve_LP(obj = c.vec.ts, mat = A.mat.ts, dir = const.vec.ts, rhs = b.vec.ts, types = vtype.vec.ts, control = list("verbose" =TRUE))
+ship.ts <- sol.ts$solution
+names(ship.ts) <- colnames(A.mat.ts)
+# compare solutions
+## cost - effect
+sol.ts$optimum
+sol.cap$optimum
+sol.uncnst$optimum
+## solution
+data.table(rbind(ship.cap, ship.uncnst, ship.ts[1:27]))
+```
+
+5. Change the problem by adding constraints that prohibit the center to be closer than 0.5 distance units to any point.
+
+```{r, exe-5, collapse=TRUE, echo=TRUE, cache=F}
+library(ROI)            # load package
+# solver for non-linear, generally constrained programms
+library(ROI.plugin.alabama)   
+
+n <- 100
+# sample weights for each point/customer
+a.vec <- sample(1:100, size = n)    
+# sample x coordinates
+x.vec <- rnorm(n)
+# sample y coordinates
+y.vec <- rnorm(n)
+# Set up optimization program
+copt <- OP(
+  objective = F_objective(F = function(loc) sum(a.vec * (abs(x.vec - loc[1]) + abs(y.vec - loc[2]) ) ), n = 2),
+  types = rep("C", 2),
+  bounds = V_bound(ub = rep(Inf, 2), lb = rep(-Inf, 2)),
+  constraints = F_constraint(
+      F = function(loc) min( (abs(x.vec - loc[1]) + abs(y.vec - loc[2]) ) ), 
+      dir = ">=",
+      rhs = 0.5)
+)
+# solve the problem
+sol.cnst <- ROI_solve(copt, start = c(0,0), solver = "alabama")         
+ # obtain solution
+sol <- sol.cnst$solution
+# objective value
+sol.cnst$objval
+# check constraint
+min(abs(x.vec - sol[1]) + abs(y.vec - sol[2]))
+
+# unconstrained solution
+constraints(copt) <- NULL
+sol.uncnst <- ROI_solve(copt, start = c(0,0)) 
+# compare objective values
+sol.cnst$objval - sol.uncnst$objval
+# compare solutions
+rbind(sol.cnst$solution, sol.uncnst$solution)
+# plot solutions
+plot(x.vec, y.vec, xlab="x", ylab="y", cex = log(a.vec)/4, pch=16, ylim=c(-3,3), xlim=c(-3,3)) 
+points(rbind(sol.cnst$solution,sol.cnst$solution), col="blue", cex=2, pch =15)
+points(rbind(sol.uncnst$solution,sol.uncnst$solution), col="red", cex=2, pch =17)
+legend("topleft", pch=c(15,17), col=c("blue","red"), legend=c("constrained opt.","unconstrained opt."))
+```
+
+6. Formulate the Newsvendor model with $\beta$ service level restriction with the `ROI` framework.
+
+```{r, exe-6, collapse=TRUE, echo=TRUE, cache=F}
+# first order loss function
+l.fun <- function(x) {
+  sigma * (dnorm((x-mu)/sigma) - (x-mu)/sigma * (1-pnorm((x-mu)/sigma) ))
+}
+
+# example data
+mu <- 100
+sigma <- 20
+co <- .75
+cu <- 1
+beta <- 0.975
+
+copt <- OP(
+  objective = F_objective(F = function(x) co*(x - mu) + (cu + co)*sigma*(dnorm((x-mu)/sigma) - ((x-mu)/sigma) * (1- pnorm((x-mu)/sigma))) , n = 1),
+  types = rep("C", 1),
+  bounds = V_bound(ub = rep(Inf, 1), lb = rep(1, 1)),
+  constraints = F_constraint(
+      F = function(x) (1 - l.fun(x)/mu), 
+      dir = ">=",
+      rhs = beta)
+)
+# beta-constrained solution
+sol <- ROI_solve(copt, start = mu, solver = "alabama")  
+# optimal q
+sol$solution
+# cost
+sol$objval
+
+# cost-opt solution
+constraints(copt) <- NULL
+sol.cost <- ROI_solve(copt, start = mu)  
+# optimal q
+sol.cost$solution
+# cost
+sol.cost$objval
+```
+
+7. Formulate the constraint matrix `L` as a sparse matrix.
+
+```{r, exe-7-linear-assignment-problem, collapse=TRUE, echo=TRUE, cache=F}
+# create problem dimension
+n <- 10
+# create cost vector
+c.vec <- rpois(n^2, 100)
+# decision vector
+x.vec <- numeric(n^2)
+names(x.vec) <- apply(expand.grid(paste("i", 1:n, sep=""), paste("j", 1:n, sep="")),1, function(x) paste(x, collapse = "-"))
+# constraint matrix
+nb.const <- 1
+const.mat <- NULL 
+for(i in 1:10){
+  tmp.ind.row <- rep(nb.const, n)       
+  tmp.ind.col <- which(grepl(paste("-j",i,"$",sep="") , names(x.vec)))
+  tmp.const <- rep(1, n)  
+  const.mat <- rbind(const.mat, cbind(tmp.ind.row, tmp.ind.col, tmp.const)) # update constraint data frame
+  nb.const <- 1 + nb.const   
+}
+for(i in 1:10){
+  tmp.ind.row <- rep(nb.const, n)       
+  tmp.ind.col <- which(grepl(paste("i",i,"-",sep="") , names(x.vec)))
+  tmp.const <- rep(1, n)  
+  const.mat <- rbind(const.mat, cbind(tmp.ind.row, tmp.ind.col, tmp.const)) # update constraint data frame
+  nb.const <- 1 + nb.const   
+}
+# write as sparse matrix
+library(Matrix)
+A.mat <- sparseMatrix(i = const.mat[,1], 
+                      j = const.mat[,2], 
+                      x = const.mat[,3],
+                      dims = c(2*n , n^2),
+                      giveCsparse = T)
+# Solution via RGLPK
+sol <- Rglpk_solve_LP(obj = c.vec, mat = A.mat, dir = rep("==", 2*n), rhs = rep(1, 2*n), types = rep("B", n^2))
+
+#############################################################
+# Alternative: ROI package requires a different sparse matrix class, 
+# but syntax is almost the same
+library(slam)
+A.mat.slam <- simple_triplet_matrix(i = const.mat[,1],
+                               j = const.mat[,2],
+                               v = const.mat[,3],
+                               nrow = 2*n, ncol = n^2)
+
+copt <- OP(
+  objective = L_objective(L = c.vec),
+  types = rep("B", n^2),
+  constraints = L_constraint(L = A.mat.slam, 
+                             dir = rep("==", 2*n), 
+                             rhs = rep(1, 2*n)))
+# solve the problem
+sol.roi <- ROI_solve(copt)         
+
+# check equality
+all(sol.roi$solution == sol$solution)
+sol$optimum == sol.roi$objval
+
+# display solution in matrix form
+sol.mat <- matrix(sol$solution, ncol = n)
+# check first set of constraints
+colSums(sol.mat)                    # all column sums equal to 1?
+# check second set of constraints
+rowSums(sol.mat)                    # all row sums equal to 1?
+# check objective
+sum(sol.mat * matrix(c.vec, ncol = n))
+```
+
+8. Implement the quadratic assignment problem with `ROI`. Can you reuse parts of the linear assignment problem?
+
+Essentially, the objective function has to be altered such that
+
+$$ \min \rightarrow \sum_{i=1}^n\sum_{j=1}^{n} \sum_{k=1}^n\sum_{l=1}^{n} x_{ij} \cdot x_{kl} \cdot f_{ik} \cdot d_{jl}$$
+
+```{r, exe-8-quadratic-assignment-problem, collapse=TRUE, echo=TRUE, cache=F}
+# sample flow matrix
+flow.mat <- matrix(sample(10:100, n^2, replace=T) , ncol=n)
+# sample dist matrix
+dist.mat <- round(matrix(rnorm(n^2, mean = 5, sd = 1) , ncol=n),1)
+diag(dist.mat) <- 0
+dist.mat[upper.tri(dist.mat)] <- t(dist.mat)[upper.tri(dist.mat)]
+# quadratic assignment problem 
+quad.ass.obj.fun <- function(x){
+  # the elegant way
+  tmp.ass.mat <- matrix(x, ncol = sqrt(length(x)) )
+  sum(diag(flow.mat %*% tmp.ass.mat %*% dist.mat %*% t(tmp.ass.mat)))
+  # direct way
+  #tmp <- apply(tmp.ass.mat,1, function(x) which(x==1))
+  #sum(as.numeric(flow.mat) * dist.mat[as.matrix(expand.grid(tmp, tmp))])
+}
+
+copt <- OP(
+  objective = F_objective(F = quad.ass.obj.fun, n = n^2),
+  types = rep("B", n^2),
+  constraints = L_constraint(L = A.mat.slam, 
+                             dir = rep("==", 2*n), 
+                             rhs = rep(1, 2*n)))
+# solve the problem
+# sol.roi <- ROI_solve(copt)         
+# no solver --> remedy?
+```
+
+9. The function for accessing the distances is obtained from [here](https://www.r-orms.org/mixed-integer-linear-programming/practicals/problem-tsp/). Try to formulate a more compact `dist_fun()`.
+
+--> postponed
+
+10. Implement and solve the Wagner-Whithin model introduced above with `ompr`.
+
+```{r, exe-10, collapse=TRUE, echo=TRUE, cache=F}
+library(ompr)
+library(dplyr)
+library(ompr.roi)
+library(ROI.plugin.glpk)
+# number of periods
+n <- 10
+# sample demand
+d.vec <- round(runif(n, min = 10 , max = 50))
+# ordering cost
+co <- 100
+# stock holding cost
+ch <- 1
+
+model <- MIPModel() %>%
+  # 
+  add_variable(x[i], i = 1:n, type = "continuous", lb = 0, ub = sum(d.vec)) %>%
+  # 
+  add_variable(l[i], i = 0:n, type = "continuous", lb = 0, ub = sum(d.vec)) %>%
+  # 
+  add_variable(a[i], i = 1:n, type = "binary", lb = 0, ub = 1) %>%
+  # 
+  set_objective(sum_expr(l[i] * ch + a[i] * co, i = 1:n), "min") %>%
+  # leave each node
+  add_constraint(l[0] == 0) %>%
+  # leave each node
+  add_constraint(l[i] == l[i-1] + x[i] - d.vec[i], i = 1:n) %>%
+  # visit each node
+  add_constraint(x[i] <= a[i] * sum(d.vec), i = 1:n) 
+
+# solve model with GLPK
+result <- solve_model(model, with_ROI(solver = "glpk", verbose = TRUE))
+# total cost
+result$objective_value
+# 
+# # obtain solution
+solution <- get_solution(result, x[i])
+solution <- data.frame(solution[-1] , demand = d.vec)
+colnames(solution)[1:2] <- c("period","order quant.")
+solution
+```
