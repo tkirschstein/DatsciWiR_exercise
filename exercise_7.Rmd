@@ -71,6 +71,8 @@ opt.news$par - q.star
 
 3. Add an inventory capacity constraint to the Wagner-Whitin model and resolve it with `Rglpk`.
 
+Ad these constraints $l_t \leq cap \qquad \forall t\in T$ to the model.
+
 ```{r, exe-3, collapse=TRUE, echo=TRUE, cache=F}
 library(Rglpk)     
 # assign names to decision vector
@@ -83,7 +85,7 @@ x.vec <- numeric(3*n + 1)           # initialize decision variables
 # right-hand side vector with 200 units inventory capacity
 b.vec <- c(d.vec, rep(0, n + 2), rep(200, n) )  
 # objective coefficients 
-c.vec <- c(rep(ch, n+1), rep(0, n), rep(co, n))    
+c.vec <- c(rep(ch, n+1), rep(0, n), rep(co, n))
 # vector with constraint directions 
 const.vec <- c(rep("==", n), rep("<=", n) , rep("==", 2), rep("<=", n) )
 # vector with variable types
@@ -150,7 +152,7 @@ d.a.t <- round(runif(n.a*n.t, min = 1, max = 50))
 d.t.b <- round(runif(n.b*n.t, min = 1, max = 30))
 # initialize decision variables
 x.vec <- numeric(n.a*n.t + n.b*n.t)           
-# right-hand side vector with 200 units inventory capacity
+# right-hand side vector
 b.vec <- c(s.vec, d.vec, rep(0, n.t) )  
 # objective coefficients 
 c.vec <- c(d.a.t, d.t.b)    
@@ -317,7 +319,7 @@ data.table(rbind(ship.cap, ship.uncnst, ship.ts[1:27]))
 
 ```{r, exe-5, collapse=TRUE, echo=TRUE, cache=F}
 library(ROI)            # load package
-# solver for non-linear, generally constrained programms
+# solver for non-linear, generally constrained programs
 library(ROI.plugin.alabama)   
 
 n <- 100
@@ -524,19 +526,19 @@ co <- 100
 ch <- 1
 
 model <- MIPModel() %>%
-  # 
+  # add order quantity variable
   add_variable(x[i], i = 1:n, type = "continuous", lb = 0, ub = sum(d.vec)) %>%
-  # 
+  # stock level variable
   add_variable(l[i], i = 0:n, type = "continuous", lb = 0, ub = sum(d.vec)) %>%
-  # 
+  # order indicator variable
   add_variable(a[i], i = 1:n, type = "binary", lb = 0, ub = 1) %>%
-  # 
+  # objective function
   set_objective(sum_expr(l[i] * ch + a[i] * co, i = 1:n), "min") %>%
-  # leave each node
+  # stock initialization
   add_constraint(l[0] == 0) %>%
-  # leave each node
+  # stock balance constraints
   add_constraint(l[i] == l[i-1] + x[i] - d.vec[i], i = 1:n) %>%
-  # visit each node
+  # order indicator constraint
   add_constraint(x[i] <= a[i] * sum(d.vec), i = 1:n) 
 
 # solve model with GLPK
